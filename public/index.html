@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PES | Pro Esports System</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="css/style.css">
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+
+    <!-- Loading Screen -->
+    <div id="loading-screen" class="loading-screen">
+        <div class="loader-content">
+            <div class="logo-glow">PES</div>
+            <div class="loading-bar-container">
+                <div class="loading-bar"></div>
+            </div>
+            <p class="neon-text-small">INITIALIZING SYSTEM...</p>
+        </div>
+    </div>
+
+    <!-- Auth Container -->
+    <div id="auth-container" class="auth-container hidden">
+        <div class="glass-card auth-card">
+            <h1 class="neon-text">LOGIN</h1>
+            <div class="tabs">
+                <button class="tab-btn active" onclick="switchTab('login')">LOGIN</button>
+                <button class="tab-btn" onclick="switchTab('register')">REGISTER</button>
+            </div>
+
+            <form id="login-form" class="auth-form">
+                <div class="input-group">
+                    <i class="fas fa-user"></i>
+                    <input type="text" id="login-username" placeholder="Username" required>
+                </div>
+                <div class="input-group">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" id="login-password" placeholder="Password" required>
+                </div>
+                <button type="submit" class="neon-button">ENTER SYSTEM</button>
+            </form>
+
+            <form id="register-form" class="auth-form hidden" enctype="multipart/form-data">
+                <div class="input-group">
+                    <i class="fas fa-user"></i>
+                    <input type="text" id="reg-username" placeholder="Username" required>
+                </div>
+                <div class="input-group">
+                    <i class="fas fa-envelope"></i>
+                    <input type="email" id="reg-email" placeholder="Email" required>
+                </div>
+                <div class="input-group">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" id="reg-password" placeholder="Password" required>
+                </div>
+                <div class="input-group">
+                    <i class="fas fa-camera"></i>
+                    <input type="file" id="reg-pfp" accept="image/*">
+                </div>
+                <button type="submit" class="neon-button">CREATE ACCOUNT</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main Dashboard -->
+    <div id="dashboard" class="dashboard hidden">
+        <nav class="glass-navbar">
+            <div class="nav-left">
+                <div class="logo-small">PES<span>2026</span></div>
+                <div class="online-counter">
+                    <span class="pulse-dot"></span>
+                    <span id="active-count">0</span> ACTIVE AGENTS
+                </div>
+            </div>
+            <div class="nav-right">
+                <div class="notification-icon"><i class="fas fa-bell"></i></div>
+                <div class="user-profile" id="nav-profile">
+                    <img src="" id="nav-pfp" alt="PFP">
+                    <span id="nav-username">Agent</span>
+                </div>
+                <button onclick="logout()" class="logout-btn"><i class="fas fa-sign-out-alt"></i></button>
+            </div>
+        </nav>
+
+        <main class="content-area">
+            <div id="main-menu" class="main-menu">
+                <div class="hero-section">
+                    <h2 class="neon-text-lg">CHAMPIONS ARE MADE HERE</h2>
+                    <p>Experience the future of esports management.</p>
+                </div>
+
+                <div class="action-cards">
+                    <div class="glass-card action-card" onclick="showView('tournaments')">
+                        <div class="card-icon"><i class="fas fa-trophy"></i></div>
+                        <h3>GAME SCHEDULE</h3>
+                        <p>View upcoming events and live brackets</p>
+                    </div>
+                    <div class="glass-card action-card" onclick="showView('users')">
+                        <div class="card-icon"><i class="fas fa-users"></i></div>
+                        <h3>USERS</h3>
+                        <p>Browse registered players and stats</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tournaments View -->
+            <div id="tournaments-view" class="view hidden">
+                <div class="view-header">
+                    <button class="back-btn" onclick="showView('main')"><i class="fas fa-arrow-left"></i> BACK</button>
+                    <h2 class="neon-text">ACTIVE TOURNAMENTS</h2>
+                    <button id="admin-add-btn" class="neon-button small hidden" onclick="toggleModal('tournament-modal')">+ NEW EVENT</button>
+                </div>
+                <div id="tournament-list" class="tournament-grid"></div>
+            </div>
+
+            <!-- Users View -->
+            <div id="users-view" class="view hidden">
+                <div class="view-header">
+                    <button class="back-btn" onclick="showView('main')"><i class="fas fa-arrow-left"></i> BACK</button>
+                    <h2 class="neon-text">OPERATIVE DIRECTORY</h2>
+                </div>
+                <div id="user-list" class="user-list-grid"></div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Tournament Detail Modal -->
+    <div id="bracket-modal" class="modal hidden">
+        <div class="modal-content glass-card wide">
+            <span class="close" onclick="toggleModal('bracket-modal')">&times;</span>
+            <h2 id="modal-tournament-title" class="neon-text">TOURNAMENT BRACKET</h2>
+            <div class="bracket-container" id="bracket-display"></div>
+        </div>
+    </div>
+
+    <!-- Admin Panel / Create Tournament Modal -->
+    <div id="tournament-modal" class="modal hidden">
+        <div class="modal-content glass-card">
+            <span class="close" onclick="toggleModal('tournament-modal')">&times;</span>
+            <h2 class="neon-text">CREATE EVENT</h2>
+            <form id="tournament-form">
+                <input type="text" id="t-title" placeholder="Event Title" required>
+                <textarea id="t-desc" placeholder="Description"></textarea>
+                <div class="input-row">
+                    <input type="date" id="t-date" required>
+                    <input type="time" id="t-time" required>
+                </div>
+                <input type="text" id="t-venue" placeholder="Venue / Online Link" required>
+                <input type="file" id="t-banner" accept="image/*">
+                <button type="submit" class="neon-button">DEPLOY TOURNAMENT</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="toast-container"></div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
