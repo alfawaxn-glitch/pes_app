@@ -1,201 +1,287 @@
-require('dotenv').config();
-const express = require('express');
-const http = require('http');
-const mongoose = require('mongoose');
-const path = require('path');
-const multer = require('multer');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const { Server } = require('socket.io');
-const fs = require('fs');
+const socket = io('https://pes-app.onrender.com');
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server, {
-    cors: { origin: "*" }
-});
+let currentUser = null;
+let isAdmin = false;
 
-// Create uploads directory if not exists
-const uploadDir = 'uploads';
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir);
-}
+// --- DOM Elements ---
+const loadingScreen = document.getElementById('loading-screen');
+const authContainer = document.getElementById('auth-container');
+const dashboard = document.getElementById('dashboard');
+const tournamentList = document.getElementById('tournament-list');
+const userList = document.getElementById('user-list');
 
-// Middleware
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// --- Initialization ---
+window.onload = () => {
+    setTimeout(() => {
+        loadingScreen.style.opacity = '0';
 
-// Database Connection
-mongoose.connect(process.env.MONGODB_URI)
-    .then(() => console.log('Connected to PES Database'))
-    .catch(err => console.error('DB Connection Error:', err));
+        setTimeout(() => {
+            loadingScreen.classList.add('hidden');
+            checkAuth();
+        }, 1000);
 
-// --- Models ---
-
-const UserSchema = new mongoose.Schema({
-    username: { type: String, required: true, unique: true },
-    email: { type: String, required: true, unique: true },
-    password: { type: String, required: true },
-    profilePic: { type: String, default: 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png' },
-    isAdmin: { type: Boolean, default: false },
-    wins: { type: Number, default: 0 },
-    joinedEvents: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Tournament' }],
-    online: { type: Boolean, default: false }
-});
-
-const TournamentSchema = new mongoose.Schema({
-    title: String,
-    description: String,
-    date: String,
-    time: String,
-    venue: String,
-    banner: String,
-    structure: {
-        quarterFinals: [String],
-        semiFinals: [String],
-        final: [String],
-        winner: String
-    },
-    createdBy: String,
-    createdAt: { type: Date, default: Date.now }
-});
-
-const User = mongoose.model('User', UserSchema);
-const Tournament = mongoose.model('Tournament', TournamentSchema);
-
-// --- Auth Middleware ---
-const authenticateToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    if (!token) return res.sendStatus(401);
-    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-        if (err) return res.sendStatus(403);
-        req.user = user;
-        next();
-    });
+    }, 2500);
 };
 
-// --- Storage Config ---
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, 'uploads/'),
-    filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
-});
-const upload = multer({ storage });
+function checkAuth() {
 
-// --- Routes ---
+    const token = localStorage.getItem('pes_token');
 
-// Register
-app.post('/api/auth/register', upload.single('profilePic'), async (req, res) => {
+    if (token) {
+
+        currentUser = JSON.parse(localStorage.getItem('pes_user'));
+        isAdmin = localStorage.getItem('pes_isAdmin') === 'true';
+
+        initDashboard();
+
+    } else {
+
+        authContainer.classList.remove('hidden');
+
+    }
+}
+
+// --- Auth Functions ---
+function switchTab(tab) {
+
+    document.querySelectorAll('.tab-btn')
+        .forEach(b => b.classList.remove('active'));
+
+    document
+        .querySelector(`[onclick="switchTab('${tab}')"]`)
+        .classList.add('active');
+
+    if (tab === 'login') {
+
+        document.getElementById('login-form')
+            .classList.remove('hidden');
+
+        document.getElementById('register-form')
+            .classList.add('hidden');
+
+    } else {
+
+        document.getElementById('login-form')
+            .classList.add('hidden');
+
+        document.getElementById('register-form')
+            .classList.remove('hidden');
+
+    }
+}
+
+document.getElementById('login-form').onsubmit = async (e) => {
+
+    e.preventDefault();
+
+    const username = document.getElementById('login-username').value;
+    const password = document.getElementById('login-password').value;
+
     try {
-        const { username, email, password } = req.body;
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const profilePic = req.file ? `/uploads/${req.file.filename}` : undefined;
-        
-        const user = new User({ 
-            username, 
-            email, 
-            password: hashedPassword, 
-            profilePic,
-            isAdmin: username === process.env.ADMIN_USER 
+
+        const res = await fetch('https://pes-app.onrender.com/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
         });
-        await user.save();
-        
-        io.emit('userUpdate', { type: 'new_registration', username });
-        res.status(201).json({ message: 'User created' });
-    } catch (error) {
-        res.status(400).json({ error: error.message });
+
+        const data = await res.json();
+
+        if (data.token) {
+
+            localStorage.setItem('pes_token', data.token);
+            localStorage.setItem('pes_user', JSON.stringify(data));
+            localStorage.setItem('pes_isAdmin', data.isAdmin);
+
+            location.reload();
+
+        } else {
+
+            showToast(data.error, 'error');
+
+        }
+
+    } catch (err) {
+
+        showToast('Login Failed', 'error');
+
     }
-});
+};
 
-// Login
-app.post('/api/auth/login', async (req, res) => {
-    const { username, password } = req.body;
-    
-    // Check Admin Hardcoded credentials
-    if (username === process.env.ADMIN_USER && password === process.env.ADMIN_PASS) {
-        const token = jwt.sign({ username, isAdmin: true }, process.env.JWT_SECRET);
-        return res.json({ token, isAdmin: true, username });
+document.getElementById('register-form').onsubmit = async (e) => {
+
+    e.preventDefault();
+
+    const formData = new FormData();
+
+    formData.append('username', document.getElementById('reg-username').value);
+    formData.append('email', document.getElementById('reg-email').value);
+    formData.append('password', document.getElementById('reg-password').value);
+
+    const pfp = document.getElementById('reg-pfp').files[0];
+
+    if (pfp) formData.append('profilePic', pfp);
+
+    try {
+
+        const res = await fetch('https://pes-app.onrender.com/api/auth/register', {
+            method: 'POST',
+            body: formData
+        });
+
+        if (res.ok) {
+
+            showToast('Account Created! Please Login');
+            switchTab('login');
+
+        } else {
+
+            const data = await res.json();
+            showToast(data.error, 'error');
+
+        }
+
+    } catch (err) {
+
+        showToast('Registration Error', 'error');
+
+    }
+};
+
+function logout() {
+
+    localStorage.clear();
+    location.reload();
+
+}
+
+// --- Dashboard Logic ---
+function initDashboard() {
+
+    dashboard.classList.remove('hidden');
+
+    document.getElementById('nav-username').innerText = currentUser.username;
+
+    document.getElementById('nav-pfp').src =
+        currentUser.profilePic ||
+        'https://cdn-icons-png.flaticon.com/512/3135/3135715.png';
+
+    if (isAdmin) {
+
+        document.getElementById('admin-add-btn')
+            .classList.remove('hidden');
+
     }
 
-    const user = await User.findOne({ username });
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-        return res.status(401).json({ error: 'Invalid credentials' });
+    socket.emit('userLoggedIn', currentUser.username);
+
+    loadTournaments();
+    loadUsers();
+}
+
+function showView(view) {
+
+    document.querySelectorAll('.view, .main-menu')
+        .forEach(v => v.classList.add('hidden'));
+
+    if (view === 'main') {
+
+        document.getElementById('main-menu')
+            .classList.remove('hidden');
+
+    } else {
+
+        document.getElementById(`${view}-view`)
+            .classList.remove('hidden');
+
     }
+}
 
-    const token = jwt.sign({ userId: user._id, username: user.username, isAdmin: user.isAdmin }, process.env.JWT_SECRET);
-    res.json({ token, isAdmin: user.isAdmin, username: user.username, profilePic: user.profilePic });
-});
+async function loadTournaments() {
 
-// Get Users
-app.get('/api/users', authenticateToken, async (req, res) => {
-    const users = await User.find({}, '-password');
-    res.json(users);
-});
-
-// Delete User (Admin Only)
-app.delete('/api/users/:id', authenticateToken, async (req, res) => {
-    if (!req.user.isAdmin) return res.sendStatus(403);
-    await User.findByIdAndDelete(req.params.id);
-    io.emit('userUpdate', { type: 'user_deleted' });
-    res.json({ message: 'User deleted' });
-});
-
-// Tournament Routes
-app.get('/api/tournaments', authenticateToken, async (req, res) => {
-    const tournaments = await Tournament.find().sort({ createdAt: -1 });
-    res.json(tournaments);
-});
-
-app.post('/api/tournaments', authenticateToken, upload.single('banner'), async (req, res) => {
-    if (!req.user.isAdmin) return res.sendStatus(403);
-    const { title, description, date, time, venue } = req.body;
-    const banner = req.file ? `/uploads/${req.file.filename}` : 'https://picsum.photos/800/400';
-    
-    const tournament = new Tournament({
-        title, description, date, time, venue, banner,
-        structure: {
-            quarterFinals: ['TBD', 'TBD', 'TBD', 'TBD', 'TBD', 'TBD', 'TBD', 'TBD'],
-            semiFinals: ['TBD', 'TBD', 'TBD', 'TBD'],
-            final: ['TBD', 'TBD'],
-            winner: ''
+    const res = await fetch('https://pes-app.onrender.com/api/tournaments', {
+        headers: {
+            'Authorization': `Bearer ${localStorage.getItem('pes_token')}`
         }
     });
-    await tournament.save();
-    io.emit('tournamentUpdate', tournament);
-    res.json(tournament);
-});
 
-app.put('/api/tournaments/:id/bracket', authenticateToken, async (req, res) => {
-    if (!req.user.isAdmin) return res.sendStatus(403);
-    const { structure } = req.body;
-    const tournament = await Tournament.findByIdAndUpdate(req.params.id, { structure }, { new: true });
-    io.emit('tournamentUpdate', tournament);
-    res.json(tournament);
-});
+    const tournaments = await res.json();
 
-app.delete('/api/tournaments/:id', authenticateToken, async (req, res) => {
-    if (!req.user.isAdmin) return res.sendStatus(403);
-    await Tournament.findByIdAndDelete(req.params.id);
-    io.emit('tournamentUpdate', { type: 'deleted' });
-    res.json({ message: 'Deleted' });
-});
+    tournamentList.innerHTML = tournaments.map(t => `
 
-// --- Socket.io Logic ---
-let activeUsers = new Set();
+        <div class="glass-card tournament-card">
 
-io.on('connection', (socket) => {
-    socket.on('userLoggedIn', (username) => {
-        activeUsers.add(username);
-        io.emit('activeCount', activeUsers.size);
-        io.emit('userStatusChange', { username, status: 'online' });
+            <img 
+                src="https://pes-app.onrender.com${t.banner}" 
+                class="t-banner" 
+                alt="banner"
+            >
+
+            <h3>${t.title}</h3>
+
+            <p>
+                <i class="fas fa-calendar"></i>
+                ${t.date} | ${t.time}
+            </p>
+
+            <p>
+                <i class="fas fa-map-marker-alt"></i>
+                ${t.venue}
+            </p>
+
+            <button 
+                class="neon-button small"
+                onclick="openBracket('${t._id}')"
+            >
+                VIEW BRACKET
+            </button>
+
+            ${isAdmin ? `
+                <button 
+                    class="delete-btn"
+                    onclick="deleteTournament('${t._id}')"
+                >
+                    <i class="fas fa-trash"></i>
+                </button>
+            ` : ''}
+
+        </div>
+
+    `).join('');
+}
+
+async function loadUsers() {
+
+    const res = await fetch('https://pes-app.onrender.com/api/users', {
+        headers: {
+            'Authorization': `Bearer ${localStorage.getItem('pes_token')}`
+        }
     });
 
-    socket.on('disconnect', () => {
-        // Simple logic: in a real app we'd map socket.id to user
-        io.emit('activeCount', Math.max(0, activeUsers.size - 1));
-    });
-});
+    const users = await res.json();
 
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`PES running on port ${PORT}`));
+    userList.innerHTML = users.map(u => `
+
+        <div class="glass-card user-item">
+
+            <img src="${u.profilePic}" class="pfp-large" alt="pfp">
+
+            <div class="status-indicator online"></div>
+
+            <h4>${u.username}</h4>
+
+            <p>Wins: ${u.wins}</p>
+
+            ${isAdmin ? `
+                <button 
+                    class="neon-button small"
+                    onclick="deleteUser('${u._id}')"
+                >
+                    BAN
+                </button>
+            ` : ''}
+
+        </div>
+
+    `).join('');
+}
